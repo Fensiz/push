@@ -1,3 +1,3 @@
-# SSK3
+# Push Project
 
-A description of this package.
+Simple project with parsing XML, YAML, JSON and external commands executions.

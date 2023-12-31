@@ -2,6 +2,8 @@ import ArgumentParser
 import Foundation
 import SWXMLHash
 import Yams
+import Logging
+
 
 struct Stand {
 	let name: String
@@ -55,10 +57,13 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 	
 
 	public func run() async {
+		
 //		let url = URL(string: "https://www.w3schools.com/xml/simple.xml")!
 //		let result = try! await URLSession.shared.data(from: url)
 //		let x = String(decoding: result.0, as: UTF8.self)
 
+		
+		
 		let url = FileManager.default
 			.homeDirectoryForCurrentUser
 			.appendingPathComponent("Downloads")
@@ -71,10 +76,6 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 			.appendingPathExtension("yaml")
 		
 		
-//		print(url)
-//		result
-//		print()
-//		print(result.0)
 		guard let x = try? String(contentsOf: url, encoding: .utf8) else { return }
 		var xml = XMLHash.parse(x)
 		print(">>\(xml["breakfast_menu"].children[0]["name"].element?.text ?? "")<<<")
@@ -84,13 +85,17 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 		print((node as! [[AnyHashable:Any]])[0]["remote_user"] ?? "" )
 		
 		do {
-			let x = try await shell("ssh vm-deb.local \"ls -l\"")
-			print("\(x.0) \(x.1)")
+			print("+++")
+			Run.host = "vm-deb.local"
+//			let x = try await Run.ssh("echo foo 1>&2")
+			let x = try await Run.ssh("ls -l")
+			print(">\(x.0 ?? "") \(x.1)<")
 //			let y = try shell(<#T##command: String##String#>)
 			
 		} catch let error {
 			print(error.localizedDescription)
 		}
+		let s = readLine()
 	
 
 //		print(template)
@@ -101,23 +106,71 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 //			print(error)
 //		}
 	}
-	func shell(_ command: String) async throws -> (String, Int32)  {
+
+
+}
+
+class Run {
+	enum RunError: Error {
+	  case hostNotSet
+	}
+	static var logger = {
+		var log = Logger(label: "Run")
+		log.logLevel = .warning
+		return log
+	}()
+	static var host: String? = nil
+	
+	static func scp(_ command: String) async throws -> (String?, Int32)  {
+		guard let host = self.host else {
+			throw RunError.hostNotSet
+		}
+		return try await shell("ssh \(host) \"\(command)\"")
+	}
+	
+	static func ssh(_ command: String) async throws -> (String?, Int32)  {
+		guard let host = self.host else {
+			throw RunError.hostNotSet
+		}
+		return try await shell("ssh \(host) \"\(command)\"")
+	}
+	
+	static func shell(_ command: String) async throws -> (String?, Int32)  {
 		let task = Process()
-		let pipe = Pipe()
+		let outPipe = Pipe()
+		let errPipe = Pipe()
 		
-		task.standardOutput = pipe
-		task.standardError = pipe
+		task.standardOutput = outPipe
+		task.standardError = errPipe
 		task.arguments = ["-c", command]
 		task.launchPath = "/bin/zsh"
 		task.standardInput = nil
 		try task.run()
-		Task {
-			try? await Task.sleep(until: .now + .seconds(3), clock: .continuous)
+		let check = Task {
+			logger.trace("check: start")
+//			let progressBar = Task {
+//				print("[", terminator: "")
+//				defer { print("]") }
+//				while true {
+//					print("*", terminator: "")
+//					try await Task.sleep(until: .now + .seconds(0.1), clock: .continuous)
+//				}
+//			}
+//			defer {
+//				progressBar.cancel()
+//				
+////				print("defered")
+//				
+//			}
+			try await Task.sleep(until: .now + .seconds(5), clock: .continuous)
+			
 			if task.isRunning {
 				task.terminate()
-				print("`\(command)` terminated")
+				logger.info("`\(command)` terminated")
 			}
+			logger.trace("check: finish")
 		}
+		
 //		DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
 //			if task.isRunning {
 //				task.terminate()
@@ -125,12 +178,22 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 //			}
 //		}
 		task.waitUntilExit()
+		check.cancel()
 		let status = task.terminationStatus
 		
-		let data = pipe.fileHandleForReading.readDataToEndOfFile()
-		let output = String(data: data, encoding: .utf8)!
+		let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+		let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+//		guard let data = data else { return (nil, status)}
 		
+		let output = String(data: data, encoding: .utf8)!
+//		if let errData = errData {
+			let error = String(data: errData, encoding: .utf8)!
+		if !error.isEmpty {
+			logger.error("stderr: #\(error)#")
+		}
+		logger.trace("stdout: $\(output)$")
+//			print("error")
+//		}
 		return (output, status)
 	}
-
 }

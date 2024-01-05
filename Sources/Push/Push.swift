@@ -35,16 +35,16 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 	public var text = "Hello, World!"
 	
 	@Option(help: "Product name")
-	var product: String? = nil
+	var product: String
 	
-	@Option(help: "Well")
-	var well: String? = nil
+	@Option(help: "Version")
+	var version: String? = nil
 	
 	@Option(help: "Stand name")
-	var stand: String? = nil
+	var user: String? = nil
 	
 	@Option(help: "Logical Environment Prefix (ds20)")
-	var le: String = ""
+	var le: String? = nil
 	
 //	public func validate() throws {
 //		guard product != nil else {
@@ -54,7 +54,58 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 //			throw ValidationError("'<stand>' must be set.")
 //		}
 //	}
+	public func yamlExample() {
+		let yaml = FileManager.default
+			.homeDirectoryForCurrentUser
+			.appendingPathComponent("Downloads")
+			.appendingPathComponent("verify_apache")
+			.appendingPathExtension("yaml")
+		guard let y = try? String(contentsOf: yaml, encoding: .utf8) else { return }
+		let node = (try! Yams.load(yaml: y))!
+		print((node as! [[AnyHashable:Any]])[0]["remote_user"] ?? "" )
+	}
 	
+	public func getVersion() -> String? {
+		if let version = version {
+			return version
+		} else {
+			let pomPath = FileManager.default
+				.homeDirectoryForCurrentUser
+				.appending(path: "dffess")
+				.appending(path: product)
+				.appending(path: "pom")
+				.appendingPathExtension("xml")
+			guard let pomContent = try? String(contentsOf: pomPath, encoding: .utf8) else {
+				print("Ошибка".red)
+				return nil
+			}
+			var xml = XMLHash.parse(pomContent)
+			guard let defaultVersion = try? xml["project"].byKey("version").element?.text else {
+				print("Ошибка".red)
+				return nil
+			}
+			return defaultVersion
+		}
+	}
+	
+	public func getDevOps() -> DevOps? {
+		let jsonPath = FileManager.default
+			.homeDirectoryForCurrentUser
+			.appending(path: "dffess")
+			.appending(path: product)
+			.appending(path: "devops")
+			.appendingPathExtension("json")
+		
+		guard let jsonContent = try? String(contentsOf: jsonPath, encoding: .utf8) else {
+			print("Ошибка".red)
+			return nil
+		}
+		
+		let data = jsonContent.data(using: .utf8)
+		guard let data = jsonContent.data(using: .utf8) else { return nil }
+		let devops = try? JSONDecoder().decode(DevOps.self, from: data)
+		return devops
+	}
 
 	public func run() async {
 		
@@ -63,33 +114,26 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 //		let x = String(decoding: result.0, as: UTF8.self)
 
 		
-		
-		let url = FileManager.default
-			.homeDirectoryForCurrentUser
-			.appendingPathComponent("Downloads")
-			.appendingPathComponent("simple")
-			.appendingPathExtension("xml")
-		let yaml = FileManager.default
-			.homeDirectoryForCurrentUser
-			.appendingPathComponent("Downloads")
-			.appendingPathComponent("verify_apache")
-			.appendingPathExtension("yaml")
-		
-		
-		guard let x = try? String(contentsOf: url, encoding: .utf8) else { return }
-		var xml = XMLHash.parse(x)
-		print(">>\(xml["breakfast_menu"].children[0]["name"].element?.text ?? "")<<<")
+		guard let version = getVersion() else { return }
+		print(version)
+		guard let devops = getDevOps() else { return }
+		let lePostfix = le == nil ? "" : "_\(le!)"
+		let jarName = "\(product)-\(version)-jar-with-dependencies.jar"
+		let hdfsPath = "/oozie-app/\(devops.block)/\(devops.datamartGroup)/\(product)\(lePostfix)/\(jarName)"
+		let ipaUser = user == nil ? NSUserName() + "_ipa" : user!
+		print(ipaUser)
+//		print(">>\(xml["project"].children[0]["version"].element?.text ?? "")<<<")
 //		xml["root"]["catalog"]
-		guard let y = try? String(contentsOf: yaml, encoding: .utf8) else { return }
-		let node = (try! Yams.load(yaml: y))!
-		print((node as! [[AnyHashable:Any]])[0]["remote_user"] ?? "" )
+
+
 		
 		do {
 			print("+++")
-			Run.host = "vm-deb.local"
+			let cmd = Console(host: "vm-deb.local", user: NSUserName())
 //			let x = try await Run.ssh("echo foo 1>&2")
-			let x = try await Run.ssh("ls -l")
+			var x = try await cmd.ssh("ls -l")
 			print(">\(x.0 ?? "") \(x.1)<")
+			x = try await cmd.scp(local: <#T##String#>, remote: <#T##String#>)
 //			let y = try shell(<#T##command: String##String#>)
 			
 		} catch let error {
@@ -110,32 +154,38 @@ public struct Push: ParsableCommand, AsyncParsableCommand {
 
 }
 
-class Run {
+class Console {
 	enum RunError: Error {
 	  case hostNotSet
 	}
-	static var logger = {
-		var log = Logger(label: "Run")
-		log.logLevel = .warning
-		return log
-	}()
-	static var host: String? = nil
 	
-	static func scp(_ command: String) async throws -> (String?, Int32)  {
-		guard let host = self.host else {
-			throw RunError.hostNotSet
-		}
-		return try await shell("ssh \(host) \"\(command)\"")
+	var host: String
+	var user: String
+	var logger: Logger
+	
+	init(host: String, user: String) {
+		self.host = host
+		self.user = user
+		self.logger = {
+			var log = Logger(label: "Run")
+			log.logLevel = .warning
+			return log
+		}()
 	}
 	
-	static func ssh(_ command: String) async throws -> (String?, Int32)  {
-		guard let host = self.host else {
-			throw RunError.hostNotSet
-		}
-		return try await shell("ssh \(host) \"\(command)\"")
+	func scp(local: String, remote: String) async throws -> (String?, Int32) {
+		try await shell("scp \(local) \(user)@\(host):\(remote)")
 	}
 	
-	static func shell(_ command: String) async throws -> (String?, Int32)  {
+	func sftp(_ command: String) async throws -> (String?, Int32)  {
+		try await shell("sftp \(user)@\(host) \"\(command)\"")
+	}
+	
+	func ssh(_ command: String) async throws -> (String?, Int32)  {
+		try await shell("ssh \(user)@\(host) \"\(command)\"")
+	}
+	
+	func shell(_ command: String) async throws -> (String?, Int32)  {
 		let task = Process()
 		let outPipe = Pipe()
 		let errPipe = Pipe()
